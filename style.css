@@ -1,0 +1,209 @@
+/* style.css - Enterprise PDF Workspace (Formal Edition) */
+:root {
+    --primary: #1a2b3c;       /* Midnight Navy */
+    --accent: #3498db;        /* Professional Blue */
+    --success: #27ae60;       /* Forest Green */
+    --danger: #c0392b;        /* Deep Red */
+    --bg: #f8fafc;            /* Light Slate Gray BG */
+    --border: #e2e8f0;
+    --text-main: #2d3748;
+    --sidebar-bg: #ffffff;
+}
+
+body {
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    background-color: var(--bg);
+    color: var(--text-main);
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+}
+
+.container {
+    background: #ffffff;
+    width: 95vw;
+    max-width: 1200px;
+    height: 85vh;
+    border-radius: 8px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+
+header {
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: white;
+}
+
+header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.main-wrapper {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* Sidebar Styling */
+.sidebar {
+    width: 300px;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--border);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+#drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 6px;
+    padding: 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    background: var(--bg);
+    transition: 0.2s;
+}
+
+#drop-zone:hover {
+    border-color: var(--accent);
+    background: #f1f5f9;
+}
+
+/* Controls */
+button {
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 0.7rem;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+#sort-btn { background: white; border-color: var(--border); color: var(--text-main); width: 100%; }
+#merge-btn { background: var(--primary); color: white; flex: 1; }
+#split-btn { background: white; border-color: var(--success); color: var(--success); flex: 1; }
+#clear-btn { background: transparent; color: var(--danger); border: none; margin-top: auto; }
+
+/* Preview Grid */
+.preview-section {
+    flex: 1;
+    padding: 2rem;
+    background: #fdfdfd;
+    overflow-y: auto;
+}
+
+.preview-section::-webkit-scrollbar {
+    width: 8px;
+}
+
+.preview-section::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 10px;
+}
+
+#preview-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 2rem;
+}
+
+.preview-item {
+    position: relative;
+    background: white;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    cursor: grab;
+    transition: transform 0.2s ease;
+    overflow: visible; /* Allows the X button to pop out */
+}
+
+.preview-item:active { cursor: grabbing; opacity: 0.6; }
+
+/* Formal PDF Thumbnail (Strictly No Scrollbars) */
+.preview-item embed {
+    width: 100%;
+    height: 240px;
+    pointer-events: none; /* Prevents internal scrolling and toolbars */
+    overflow: hidden;
+    display: block;
+}
+
+.preview-item .file-label {
+    font-size: 0.75rem;
+    margin-top: 8px;
+    font-weight: 600;
+    color: #64748b;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Formal Sequence Badge */
+.order-badge {
+    position: absolute;
+    bottom: 40px;
+    left: 12px;
+    background: var(--accent);
+    color: white;
+    font-size: 12px;
+    font-weight: 700;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Fixed Delete Button */
+.delete-btn {
+    position: absolute;
+    top: -12px;
+    right: -12px;
+    background: var(--danger);
+    color: white;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 2px solid white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: bold;
+    z-index: 999; /* Highest priority to stay above PDF viewer */
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Status Bar */
+#status-bar {
+    padding: 0.5rem 2rem;
+    background: var(--primary);
+    color: white;
+    font-size: 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+progress { width: 150px; height: 8px; }

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Enterprise PDF Workspace</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h2>PDF Workspace</h2>
+        <div id="file-count">System Ready</div>
+    </header>
+    
+    <div class="main-wrapper">
+        <aside class="sidebar">
+            <div id="drop-zone">
+                <strong>Upload Documents</strong>
+                <p style="font-size: 11px; color: #64748b; margin: 5px 0 0;">Drag & Drop or Click</p>
+            </div>
+            <input type="file" id="pdf-input" accept=".pdf" multiple style="display: none;">
+
+            <button id="sort-btn">Alphabetical Sort (A-Z)</button>
+
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button id="merge-btn">Merge All</button>
+                <button id="split-btn">Split Mode</button>
+            </div>
+
+            <button id="clear-btn">Clear Workspace</button>
+        </aside>
+
+        <main class="preview-section">
+            <div id="preview-container">
+                <div style="grid-column: 1/-1; text-align: center; padding-top: 80px; color: #cbd5e1;">
+                    No documents currently in workspace.
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <footer id="status-bar">
+        <div id="status-text">Idle</div>
+        <progress id="progress-bar" value="0" max="100" style="display:none"></progress>
+    </footer>
+</div>
+
+<script>
+    const pdfWorker = new Worker('worker.js');
+    const { PDFDocument } = PDFLib;
+
+    const fileInput = document.getElementById('pdf-input');
+    const statusText = document.getElementById('status-text');
+    const fileCountText = document.getElementById('file-count');
+    const prog = document.getElementById('progress-bar');
+    const previewContainer = document.getElementById('preview-container');
+
+    let selectedFiles = [];
+    let draggedItemIndex = null;
+
+    async function updateUI() {
+        previewContainer.innerHTML = "";
+        
+        if (selectedFiles.length === 0) {
+            statusText.innerText = "Idle";
+            fileCountText.innerText = "System Ready";
+            previewContainer.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding-top: 80px; color: #cbd5e1;">No documents in workspace.</div>';
+            return;
+        }
+
+        fileCountText.innerText = `${selectedFiles.length} Document(s) Loaded`;
+        statusText.innerText = "Drag thumbnails to reorder sequence";
+
+        const promises = selectedFiles.map((file, index) => {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const blob = new Blob([e.target.result], { type: 'application/pdf' });
+                    // parameters for static Fit Horizontal view with no UI or scrollbars
+                    const url = URL.createObjectURL(blob) + "#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0";
+                    
+                    const item = document.createElement('div');
+                    item.className = 'preview-item';
+                    item.draggable = true;
+
+                    item.ondragstart = () => { draggedItemIndex = index; };
+                    item.ondragover = (e) => { e.preventDefault(); item.style.borderColor = "#3498db"; };
+                    item.ondragleave = () => { item.style.borderColor = "#e2e8f0"; };
+                    item.ondrop = (e) => { e.preventDefault(); handleReorder(draggedItemIndex, index); };
+
+                    item.innerHTML = `
+                        <button class="delete-btn" title="Remove" onclick="removeFile(${index})">×</button>
+                        <span class="order-badge">${index + 1}</span>
+                        <embed src="${url}" type="application/pdf">
+                        <div class="file-label" title="${file.name}">${file.name}</div>
+                    `;
+                    resolve(item);
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        });
+
+        const items = await Promise.all(promises);
+        items.forEach(item => previewContainer.appendChild(item));
+    }
+
+    function handleReorder(from, to) {
+        if (from === to) return;
+        const movedItem = selectedFiles.splice(from, 1)[0];
+        selectedFiles.splice(to, 0, movedItem);
+        updateUI();
+    }
+
+    document.getElementById('sort-btn').onclick = () => {
+        selectedFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+        updateUI();
+    };
+
+    window.removeFile = (index) => {
+        selectedFiles.splice(index, 1);
+        updateUI();
+    };
+
+    document.getElementById('clear-btn').onclick = () => {
+        selectedFiles = [];
+        fileInput.value = "";
+        updateUI();
+    };
+
+    const dropZone = document.getElementById('drop-zone');
+    dropZone.onclick = () => fileInput.click();
+    fileInput.onchange = () => {
+        selectedFiles = [...selectedFiles, ...Array.from(fileInput.files)];
+        updateUI();
+    };
+
+    dropZone.ondragover = (e) => e.preventDefault();
+    dropZone.ondrop = (e) => {
+        e.preventDefault();
+        selectedFiles = [...selectedFiles, ...Array.from(e.dataTransfer.files)];
+        updateUI();
+    };
+
+    async function startProcess(action) {
+        if (selectedFiles.length === 0) return;
+        prog.style.display = 'block';
+        prog.value = 0;
+        statusText.innerText = `Executing ${action}...`;
+        
+        const filesData = [];
+        for (let file of selectedFiles) {
+            filesData.push(await file.arrayBuffer());
+        }
+        pdfWorker.postMessage({ action, filesData }, filesData);
+    }
+
+    document.getElementById('merge-btn').onclick = () => startProcess('merge');
+    document.getElementById('split-btn').onclick = () => startProcess('split');
+
+    pdfWorker.onmessage = function(e) {
+        const { type, value, data, filename } = e.data;
+        if (type === 'progress') {
+            prog.value = value;
+        } else if (type === 'done' || type === 'page') {
+            const blob = new Blob([data], { type: 'application/pdf' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename || "output.pdf";
+            link.click();
+            if (type === 'done') {
+                statusText.innerText = "Task completed successfully.";
+                prog.style.display = 'none';
+            }
+        }
+    };
+</script>
+</body>
+</html>
