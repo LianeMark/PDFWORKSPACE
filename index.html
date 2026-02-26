@@ -2,180 +2,233 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF Workspace</title>
-    <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div class="container">
-    <header>
-        <h2>PDF Workspace</h2>
-        <div id="file-count">System Ready</div>
-    </header>
+    <nav class="top-nav">
+        <div class="nav-left">
+            <div class="nav-brand" id="brand-home" onclick="location.reload()">PDF Workspace</div>
+        </div>
+        <div id="file-count" class="nav-status">System Ready</div>
+    </nav>
     
     <div class="main-wrapper">
-        <aside class="sidebar">
-            <div id="drop-zone">
-                <strong>Upload Documents</strong>
-                <p style="font-size: 11px; color: #64748b; margin: 5px 0 0;">Drag & Drop or Click</p>
-            </div>
-            <input type="file" id="pdf-input" accept=".pdf" multiple style="display: none;">
-
-            <button id="sort-btn">Alphabetical Sort (A-Z)</button>
-
-            <div style="display: flex; gap: 10px; margin-top: 10px;">
-                <button id="merge-btn">Merge All</button>
-                <button id="split-btn">Split Mode</button>
+        <aside class="sidebar" id="sidebar" style="display:none;">
+            <div id="merge-sidebar-ui" style="display:none;">
+                <label>MERGE CONTROLS</label>
+                <button onclick="document.getElementById('pdf-input').click()" class="secondary-btn">Add More Files</button>
+                <button id="sort-btn" class="secondary-btn">Sort A-Z</button>
+                <p class="helper-text">Drag thumbnails to reorder sequence.</p>
             </div>
 
-            <button id="clear-btn">Clear Workspace</button>
-        </aside>
-
-        <main class="preview-section">
-            <div id="preview-container">
-                <div style="grid-column: 1/-1; text-align: center; padding-top: 80px; color: #cbd5e1;">
-                    No documents currently in workspace.
+            <div id="split-sidebar-ui" style="display:none;">
+                <label>SPLIT CONTROLS</label>
+                <button id="select-all-btn" class="secondary-btn">Select All Pages</button>
+                <div style="margin: 15px 0; width: 100%;">
+                    <label style="font-size: 10px; color: #64748b;">SELECT RANGE (e.g. 1-5, 8)</label>
+                    <input type="text" id="range-input" placeholder="Enter pages..." class="range-field">
+                </div>
+                <div class="option-box">
+                    <input type="checkbox" id="merge-toggle">
+                    <label for="merge-toggle">Merge to one PDF</label>
                 </div>
             </div>
+
+            <button id="process-btn" class="primary-btn">Process Now</button>
+            <button id="clear-btn" class="danger-link" onclick="location.reload()">Clear Workspace</button>
+        </aside>
+
+        <main class="preview-section" id="main-area">
+            <div id="landing-page" class="landing-container">
+                <div class="welcome-header">
+                    <h1>PDF Workspace</h1>
+                    <p>Select a professional tool to begin managing your documents.</p>
+                </div>
+                <div class="operation-grid">
+                    <div class="op-card" onclick="switchMode('merge')">
+                        <div class="op-icon">📚</div>
+                        <h3>Merge PDF</h3>
+                        <p>Combine multiple files into one seamless document.</p>
+                        <span class="op-action">START MERGING →</span>
+                    </div>
+                    <div class="op-card" onclick="switchMode('split')">
+                        <div class="op-icon">✂️</div>
+                        <h3>Split PDF</h3>
+                        <p>Extract specific pages or break documents apart.</p>
+                        <span class="op-action">START SPLITTING →</span>
+                    </div>
+                </div>
+            </div>
+            <div id="preview-container" class="grid-container" style="display:none;"></div>
         </main>
     </div>
-
-    <footer id="status-bar">
-        <div id="status-text">Idle</div>
-        <progress id="progress-bar" value="0" max="100" style="display:none"></progress>
-    </footer>
+    <footer id="status-bar">Idle</footer>
 </div>
 
+<div id="progress-modal">
+    <div class="modal-content">
+        <div class="status-badge" id="op-badge">INITIALIZING</div>
+        <div class="liquid-loader" id="liquid-box">
+            <span id="modal-percent">0%</span>
+        </div>
+        <h3 id="modal-status">Constructing PDF...</h3>
+        <div class="progress-container">
+            <div id="modal-progress-bar"></div>
+        </div>
+        <div class="live-log" id="live-log">Establishing worker connection...</div>
+        <button class="abort-btn" onclick="location.reload()">ABORT MISSION</button>
+    </div>
+</div>
+
+<input type="file" id="pdf-input" accept=".pdf" multiple style="display: none;">
+
 <script>
-    const pdfWorker = new Worker('worker.js');
-    const { PDFDocument } = PDFLib;
+let pdfWorker = new Worker('worker.js');
+const fileInput = document.getElementById('pdf-input');
+const previewContainer = document.getElementById('preview-container');
+const landingPage = document.getElementById('landing-page');
+const sidebar = document.getElementById('sidebar');
+const rangeInput = document.getElementById('range-input');
+const progressModal = document.getElementById('progress-modal');
 
-    const fileInput = document.getElementById('pdf-input');
-    const statusText = document.getElementById('status-text');
-    const fileCountText = document.getElementById('file-count');
-    const prog = document.getElementById('progress-bar');
-    const previewContainer = document.getElementById('preview-container');
+let selectedFiles = [];
+let selectedPages = new Set();
+let currentMode = '';
+let totalPagesInDoc = 0;
+let draggedIdx = null;
 
-    let selectedFiles = [];
-    let draggedItemIndex = null;
+const logs = {
+    merge: ["Analyzing documents...", "Aligning pages...", "Injecting metadata...", "Optimizing size...", "Finalizing binary..."],
+    split: ["Reading source...", "Isolating buffers...", "Generating headers...", "Extracting layers...", "Wrapping PDF..."]
+};
 
-    async function updateUI() {
-        previewContainer.innerHTML = "";
-        
-        if (selectedFiles.length === 0) {
-            statusText.innerText = "Idle";
-            fileCountText.innerText = "System Ready";
-            previewContainer.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding-top: 80px; color: #cbd5e1;">No documents in workspace.</div>';
-            return;
-        }
+function switchMode(mode) {
+    currentMode = mode;
+    landingPage.style.display = 'none';
+    sidebar.style.display = 'flex';
+    previewContainer.style.display = 'grid';
+    document.getElementById('merge-sidebar-ui').style.display = mode === 'merge' ? 'block' : 'none';
+    document.getElementById('split-sidebar-ui').style.display = mode === 'split' ? 'block' : 'none';
+    fileInput.click();
+}
 
-        fileCountText.innerText = `${selectedFiles.length} Document(s) Loaded`;
-        statusText.innerText = "Drag thumbnails to reorder sequence";
+fileInput.onchange = async () => {
+    if (fileInput.files.length === 0) return;
+    const newFiles = Array.from(fileInput.files);
+    selectedFiles = currentMode === 'split' ? [newFiles[0]] : [...selectedFiles, ...newFiles];
+    updateUI();
+};
 
-        const promises = selectedFiles.map((file, index) => {
-            return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const blob = new Blob([e.target.result], { type: 'application/pdf' });
-                    // parameters for static Fit Horizontal view with no UI or scrollbars
-                    const url = URL.createObjectURL(blob) + "#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0";
-                    
-                    const item = document.createElement('div');
-                    item.className = 'preview-item';
-                    item.draggable = true;
-
-                    item.ondragstart = () => { draggedItemIndex = index; };
-                    item.ondragover = (e) => { e.preventDefault(); item.style.borderColor = "#3498db"; };
-                    item.ondragleave = () => { item.style.borderColor = "#e2e8f0"; };
-                    item.ondrop = (e) => { e.preventDefault(); handleReorder(draggedItemIndex, index); };
-
-                    item.innerHTML = `
-                        <button class="delete-btn" title="Remove" onclick="removeFile(${index})">×</button>
-                        <span class="order-badge">${index + 1}</span>
-                        <embed src="${url}" type="application/pdf">
-                        <div class="file-label" title="${file.name}">${file.name}</div>
-                    `;
-                    resolve(item);
-                };
-                reader.readAsArrayBuffer(file);
-            });
+async function updateUI() {
+    previewContainer.innerHTML = '';
+    selectedPages.clear();
+    totalPagesInDoc = 0;
+    
+    if (currentMode === 'merge') {
+        selectedFiles.forEach((file, idx) => {
+            const item = document.createElement('div');
+            item.className = 'preview-item';
+            item.draggable = true;
+            item.ondragstart = () => { draggedIdx = idx; item.style.opacity = '0.4'; };
+            item.ondragend = () => { item.style.opacity = '1'; };
+            item.ondragover = (e) => e.preventDefault();
+            item.ondrop = () => {
+                const moved = selectedFiles.splice(draggedIdx, 1)[0];
+                selectedFiles.splice(idx, 0, moved);
+                updateUI();
+            };
+            item.innerHTML = `
+                <button class="delete-btn" onclick="selectedFiles.splice(${idx}, 1); updateUI();">×</button>
+                <embed src="${URL.createObjectURL(file)}#toolbar=0&navpanes=0">
+                <div class="file-label">${file.name}</div>`;
+            previewContainer.appendChild(item);
         });
-
-        const items = await Promise.all(promises);
-        items.forEach(item => previewContainer.appendChild(item));
+    } else {
+        const data = await selectedFiles[0].arrayBuffer();
+        pdfWorker.postMessage({ action: 'get-pages', filesData: [data] }, [data]);
     }
+}
 
-    function handleReorder(from, to) {
-        if (from === to) return;
-        const movedItem = selectedFiles.splice(from, 1)[0];
-        selectedFiles.splice(to, 0, movedItem);
-        updateUI();
+document.getElementById('sort-btn').onclick = () => {
+    selectedFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+    updateUI();
+};
+
+document.getElementById('select-all-btn').onclick = () => {
+    selectedPages.clear();
+    for (let i = 0; i < totalPagesInDoc; i++) {
+        selectedPages.add(i);
+        const item = document.getElementById(`page-card-${i}`);
+        if (item) item.classList.add('selected');
     }
+    rangeInput.value = Array.from(selectedPages).sort((a,b)=>a-b).map(i=>i+1).join(', ');
+};
 
-    document.getElementById('sort-btn').onclick = () => {
-        selectedFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
-        updateUI();
-    };
+function togglePageSelection(index) {
+    const item = document.getElementById(`page-card-${index}`);
+    if (selectedPages.has(index)) {
+        selectedPages.delete(index);
+        item.classList.remove('selected');
+    } else {
+        selectedPages.add(index);
+        item.classList.add('selected');
+    }
+    rangeInput.value = Array.from(selectedPages).sort((a,b)=>a-b).map(i=>i+1).join(', ');
+}
 
-    window.removeFile = (index) => {
-        selectedFiles.splice(index, 1);
-        updateUI();
-    };
-
-    document.getElementById('clear-btn').onclick = () => {
-        selectedFiles = [];
-        fileInput.value = "";
-        updateUI();
-    };
-
-    const dropZone = document.getElementById('drop-zone');
-    dropZone.onclick = () => fileInput.click();
-    fileInput.onchange = () => {
-        selectedFiles = [...selectedFiles, ...Array.from(fileInput.files)];
-        updateUI();
-    };
-
-    dropZone.ondragover = (e) => e.preventDefault();
-    dropZone.ondrop = (e) => {
-        e.preventDefault();
-        selectedFiles = [...selectedFiles, ...Array.from(e.dataTransfer.files)];
-        updateUI();
-    };
-
-    async function startProcess(action) {
-        if (selectedFiles.length === 0) return;
-        prog.style.display = 'block';
-        prog.value = 0;
-        statusText.innerText = `Executing ${action}...`;
+pdfWorker.onmessage = (e) => {
+    const { type, data, index, value, filename } = e.data;
+    
+    if (type === 'progress') {
+        const percent = Math.round(value);
+        document.getElementById('modal-progress-bar').style.width = percent + '%';
+        document.getElementById('liquid-box').style.setProperty('--progress', percent + '%');
+        document.getElementById('modal-percent').innerText = percent + '%';
         
-        const filesData = [];
-        for (let file of selectedFiles) {
-            filesData.push(await file.arrayBuffer());
-        }
-        pdfWorker.postMessage({ action, filesData }, filesData);
+        const curLogs = logs[currentMode] || logs.merge;
+        const logIdx = Math.min(Math.floor(percent / 20), curLogs.length - 1);
+        document.getElementById('live-log').innerText = curLogs[logIdx];
+        
+        if(percent >= 100) document.getElementById('op-badge').innerText = "FINISHING";
+    } 
+    else if (type === 'page-preview') {
+        totalPagesInDoc++;
+        const item = document.createElement('div');
+        item.className = 'preview-item';
+        item.id = `page-card-${index}`;
+        item.onclick = () => togglePageSelection(index);
+        item.innerHTML = `
+            <embed src="${URL.createObjectURL(new Blob([data], {type:'application/pdf'}))}#toolbar=0">
+            <div class="file-label">Page ${index + 1}</div>`;
+        previewContainer.appendChild(item);
+    } 
+    else if (type === 'page' || (type === 'done' && data)) {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([data], {type:'application/pdf'}));
+        link.download = filename || "output.pdf";
+        link.click();
+        if (type === 'done') progressModal.style.display = 'none';
     }
+    else if (type === 'done') {
+        progressModal.style.display = 'none';
+    }
+};
 
-    document.getElementById('merge-btn').onclick = () => startProcess('merge');
-    document.getElementById('split-btn').onclick = () => startProcess('split');
-
-    pdfWorker.onmessage = function(e) {
-        const { type, value, data, filename } = e.data;
-        if (type === 'progress') {
-            prog.value = value;
-        } else if (type === 'done' || type === 'page') {
-            const blob = new Blob([data], { type: 'application/pdf' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = filename || "output.pdf";
-            link.click();
-            if (type === 'done') {
-                statusText.innerText = "Task completed successfully.";
-                prog.style.display = 'none';
-            }
-        }
-    };
+document.getElementById('process-btn').onclick = async () => {
+    progressModal.style.display = 'flex';
+    document.getElementById('op-badge').innerText = "INITIALIZING";
+    const filesData = [];
+    for (let f of selectedFiles) filesData.push(await f.arrayBuffer());
+    const shouldMerge = document.getElementById('merge-toggle').checked;
+    const action = currentMode === 'split' ? (shouldMerge ? 'merge-selective' : 'split') : 'merge';
+    pdfWorker.postMessage({ action, filesData, targetPages: Array.from(selectedPages).sort((a,b)=>a-b) }, filesData);
+};
 </script>
 </body>
-
 </html>
+
