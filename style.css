@@ -17,8 +17,8 @@ body { font-family: 'Inter', sans-serif; margin: 0; background: #f1f5f9; overflo
 /* Homepage */
 .landing-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; width: 100%; }
 .welcome-header h1 { font-size: 3rem; color: var(--primary); margin-bottom: 10px; }
-.operation-grid { display: grid; grid-template-columns: repeat(2, 350px); gap: 30px; margin-top: 40px; }
-.op-card { background: white; padding: 40px; border-radius: 30px; border: 1px solid var(--border); cursor: pointer; transition: 0.3s; box-shadow: 0 10px 20px rgba(0,0,0,0.05); }
+.operation-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 30px; margin-top: 40px; max-width: 1200px; }
+.op-card { width: 320px; background: white; padding: 40px; border-radius: 30px; border: 1px solid var(--border); cursor: pointer; transition: 0.3s; box-shadow: 0 10px 20px rgba(0,0,0,0.05); }
 .op-card:hover { transform: translateY(-10px); box-shadow: 0 20px 30px rgba(0,0,0,0.1); border-color: var(--accent); }
 .op-icon { font-size: 4rem; margin-bottom: 20px; }
 .op-action { font-weight: 800; color: var(--accent); font-size: 0.9rem; }
