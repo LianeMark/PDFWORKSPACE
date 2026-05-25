@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF Workspace</title>
     <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -39,6 +40,12 @@
                 </div>
             </div>
 
+            <div id="ocr-sidebar-ui" style="display:none;">
+                <label>OCR CONTROLS</label>
+                <button id="ocr-select-all-btn" class="secondary-btn" onclick="document.getElementById('select-all-btn').click()">Select All Pages</button>
+                <p class="helper-text">Select pages to make searchable. Text will be embedded invisibly over the document.</p>
+            </div>
+
             <button id="process-btn" class="primary-btn">Process Now</button>
             <button id="clear-btn" class="danger-link" onclick="location.reload()">Clear Workspace</button>
         </aside>
@@ -61,6 +68,12 @@
                         <h3>Split PDF</h3>
                         <p>Extract specific pages or break documents apart.</p>
                         <span class="op-action">START SPLITTING →</span>
+                    </div>
+                    <div class="op-card" onclick="switchMode('ocr')">
+                        <div class="op-icon">👁️</div>
+                        <h3>OCR PDF</h3>
+                        <p>Make scanned documents fully searchable and selectable.</p>
+                        <span class="op-action">START OCR →</span>
                     </div>
                 </div>
             </div>
@@ -104,8 +117,12 @@ let draggedIdx = null;
 
 const logs = {
     merge: ["Analyzing documents...", "Aligning pages...", "Injecting metadata...", "Optimizing size...", "Finalizing binary..."],
-    split: ["Reading source...", "Isolating buffers...", "Generating headers...", "Extracting layers...", "Wrapping PDF..."]
+    split: ["Reading source...", "Isolating buffers...", "Generating headers...", "Extracting layers...", "Wrapping PDF..."],
+    ocr: ["Waking up neural net...", "Rendering high-DPI layers...", "Identifying character bounds...", "Injecting invisible text layer...", "Constructing Searchable PDF..."]
 };
+
+// Initialize PDF.js worker for rendering canvases
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 function switchMode(mode) {
     currentMode = mode;
@@ -114,13 +131,14 @@ function switchMode(mode) {
     previewContainer.style.display = 'grid';
     document.getElementById('merge-sidebar-ui').style.display = mode === 'merge' ? 'block' : 'none';
     document.getElementById('split-sidebar-ui').style.display = mode === 'split' ? 'block' : 'none';
+    document.getElementById('ocr-sidebar-ui').style.display = mode === 'ocr' ? 'block' : 'none';
     fileInput.click();
 }
 
 fileInput.onchange = async () => {
     if (fileInput.files.length === 0) return;
     const newFiles = Array.from(fileInput.files);
-    selectedFiles = currentMode === 'split' ? [newFiles[0]] : [...selectedFiles, ...newFiles];
+    selectedFiles = (currentMode === 'split' || currentMode === 'ocr') ? [newFiles[0]] : [...selectedFiles, ...newFiles];
     updateUI();
 };
 
@@ -222,11 +240,47 @@ pdfWorker.onmessage = (e) => {
 document.getElementById('process-btn').onclick = async () => {
     progressModal.style.display = 'flex';
     document.getElementById('op-badge').innerText = "INITIALIZING";
-    const filesData = [];
-    for (let f of selectedFiles) filesData.push(await f.arrayBuffer());
-    const shouldMerge = document.getElementById('merge-toggle').checked;
-    const action = currentMode === 'split' ? (shouldMerge ? 'merge-selective' : 'split') : 'merge';
-    pdfWorker.postMessage({ action, filesData, targetPages: Array.from(selectedPages).sort((a,b)=>a-b) }, filesData);
+    
+    if (currentMode === 'ocr') {
+        document.getElementById('op-badge').innerText = "RENDERING IMAGES";
+        const fileURL = URL.createObjectURL(selectedFiles[0]);
+        const loadingTask = pdfjsLib.getDocument(fileURL);
+        const pdf = await loadingTask.promise;
+        
+        const imagesData = [];
+        const pagesToProcess = Array.from(selectedPages).sort((a,b)=>a-b);
+        const renderScale = 2.0; // Defines the accuracy of the OCR
+        
+        for (let i = 0; i < pagesToProcess.length; i++) {
+            const page = await pdf.getPage(pagesToProcess[i] + 1);
+            const viewport = page.getViewport({ scale: renderScale }); 
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+            imagesData.push(canvas.toDataURL('image/png'));
+        }
+        
+        document.getElementById('op-badge').innerText = "MAPPING TEXT LAYER";
+        
+        // NEW FIX: We now send the RAW original document and the scale factor into the worker!
+        const filesData = [await selectedFiles[0].arrayBuffer()];
+        pdfWorker.postMessage({ 
+            action: 'ocr', 
+            imagesData: imagesData, 
+            filesData: filesData, 
+            targetPages: pagesToProcess, 
+            scale: renderScale 
+        }, filesData);
+
+    } else {
+        const filesData = [];
+        for (let f of selectedFiles) filesData.push(await f.arrayBuffer());
+        const shouldMerge = document.getElementById('merge-toggle').checked;
+        const action = currentMode === 'split' ? (shouldMerge ? 'merge-selective' : 'split') : 'merge';
+        pdfWorker.postMessage({ action, filesData, targetPages: Array.from(selectedPages).sort((a,b)=>a-b) }, filesData);
+    }
 };
 </script>
 </body>
