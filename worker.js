@@ -141,6 +141,38 @@ onmessage = async function(e) {
             const bytes = await pdf.save();
             postMessage({ type: 'done', data: bytes, filename: "images_output.pdf" }, [bytes.buffer]);
         }
+        else if (action === 'compress-light') {
+            // Lossless: copy pages into a fresh document (drops unused/orphaned objects)
+            // and save with compressed object streams.
+            const src = await PDFDocument.load(filesData[0], { updateMetadata: false });
+            const out = await PDFDocument.create();
+            const copied = await out.copyPages(src, src.getPageIndices());
+            copied.forEach((p, i) => {
+                out.addPage(p);
+                postMessage({ type: 'progress', value: ((i + 1) / copied.length) * 90 });
+            });
+            const bytes = await out.save({ useObjectStreams: true });
+            postMessage({ type: 'progress', value: 100 });
+            postMessage({ type: 'done', data: bytes, filename: "compressed_light.pdf" }, [bytes.buffer]);
+        }
+        else if (action === 'compress-strong') {
+            // Rebuild the PDF from pre-rendered JPEG pages (rendered on the main thread).
+            // Each page keeps its original size in PDF points.
+            const { pages } = e.data;
+            const out = await PDFDocument.create();
+
+            for (let i = 0; i < pages.length; i++) {
+                const p = pages[i];
+                const img = await out.embedJpg(p.data);
+                const page = out.addPage([p.width, p.height]);
+                page.drawImage(img, { x: 0, y: 0, width: p.width, height: p.height });
+                // The main thread already used the first 70% for rendering
+                postMessage({ type: 'progress', value: 70 + ((i + 1) / pages.length) * 30 });
+            }
+
+            const bytes = await out.save({ useObjectStreams: true });
+            postMessage({ type: 'done', data: bytes, filename: "compressed_output.pdf" }, [bytes.buffer]);
+        }
     } catch (err) { 
         postMessage({ type: 'error', msg: err.message }); 
     }
