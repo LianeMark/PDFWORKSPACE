@@ -46,6 +46,26 @@
                 <p class="helper-text">Select pages to make searchable. Text will be embedded invisibly over the document.</p>
             </div>
 
+            <div id="img2pdf-sidebar-ui" style="display:none;">
+                <label>IMAGE TO PDF</label>
+                <button onclick="document.getElementById('pdf-input').click()" class="secondary-btn">Add More Images</button>
+                <button id="img-sort-btn" class="secondary-btn">Sort A-Z</button>
+
+                <div style="margin: 15px 0; width: 100%;">
+                    <label style="font-size: 10px; color: #64748b;">PAGE SIZE</label>
+                    <select id="img-page-size" class="range-field">
+                        <option value="fit">Fit to image</option>
+                        <option value="a4">A4</option>
+                        <option value="letter">US Letter</option>
+                    </select>
+                </div>
+                <div style="margin: 15px 0; width: 100%;">
+                    <label style="font-size: 10px; color: #64748b;">MARGIN (pt, A4/Letter only)</label>
+                    <input type="number" id="img-margin" value="20" min="0" max="100" class="range-field">
+                </div>
+                <p class="helper-text">Drag thumbnails to reorder pages.</p>
+            </div>
+
             <button id="process-btn" class="primary-btn">Process Now</button>
             <button id="clear-btn" class="danger-link" onclick="location.reload()">Clear Workspace</button>
         </aside>
@@ -74,6 +94,12 @@
                         <h3>OCR PDF</h3>
                         <p>Make scanned documents fully searchable and selectable.</p>
                         <span class="op-action">START OCR →</span>
+                    </div>
+                    <div class="op-card" onclick="switchMode('img2pdf')">
+                        <div class="op-icon">🖼️</div>
+                        <h3>Image to PDF</h3>
+                        <p>Turn JPG, PNG and other images into a single PDF.</p>
+                        <span class="op-action">START CONVERTING →</span>
                     </div>
                 </div>
             </div>
@@ -118,7 +144,8 @@ let draggedIdx = null;
 const logs = {
     merge: ["Analyzing documents...", "Aligning pages...", "Injecting metadata...", "Optimizing size...", "Finalizing binary..."],
     split: ["Reading source...", "Isolating buffers...", "Generating headers...", "Extracting layers...", "Wrapping PDF..."],
-    ocr: ["Waking up neural net...", "Rendering high-DPI layers...", "Identifying character bounds...", "Injecting invisible text layer...", "Constructing Searchable PDF..."]
+    ocr: ["Waking up neural net...", "Rendering high-DPI layers...", "Identifying character bounds...", "Injecting invisible text layer...", "Constructing Searchable PDF..."],
+    img2pdf: ["Decoding images...", "Fixing orientation...", "Embedding pixels...", "Laying out pages...", "Finalizing binary..."]
 };
 
 // Initialize PDF.js worker for rendering canvases
@@ -132,13 +159,21 @@ function switchMode(mode) {
     document.getElementById('merge-sidebar-ui').style.display = mode === 'merge' ? 'block' : 'none';
     document.getElementById('split-sidebar-ui').style.display = mode === 'split' ? 'block' : 'none';
     document.getElementById('ocr-sidebar-ui').style.display = mode === 'ocr' ? 'block' : 'none';
+    document.getElementById('img2pdf-sidebar-ui').style.display = mode === 'img2pdf' ? 'block' : 'none';
+    fileInput.accept = mode === 'img2pdf' ? 'image/*' : '.pdf';
     fileInput.click();
 }
 
 fileInput.onchange = async () => {
     if (fileInput.files.length === 0) return;
-    const newFiles = Array.from(fileInput.files);
-    selectedFiles = (currentMode === 'split' || currentMode === 'ocr') ? [newFiles[0]] : [...selectedFiles, ...newFiles];
+    let newFiles = Array.from(fileInput.files);
+    if (currentMode === 'img2pdf') {
+        newFiles = newFiles.filter(f => f.type.startsWith('image/'));
+        selectedFiles = [...selectedFiles, ...newFiles];
+    } else {
+        selectedFiles = (currentMode === 'split' || currentMode === 'ocr') ? [newFiles[0]] : [...selectedFiles, ...newFiles];
+    }
+    fileInput.value = ''; // allows re-adding the same file
     updateUI();
 };
 
@@ -147,7 +182,7 @@ async function updateUI() {
     selectedPages.clear();
     totalPagesInDoc = 0;
     
-    if (currentMode === 'merge') {
+    if (currentMode === 'merge' || currentMode === 'img2pdf') {
         selectedFiles.forEach((file, idx) => {
             const item = document.createElement('div');
             item.className = 'preview-item';
@@ -160,9 +195,12 @@ async function updateUI() {
                 selectedFiles.splice(idx, 0, moved);
                 updateUI();
             };
+            const previewEl = currentMode === 'img2pdf'
+                ? `<img src="${URL.createObjectURL(file)}" style="width:100%;aspect-ratio:1/1.414;object-fit:contain;background:#f8fafc;border:1px solid #ddd;border-radius:4px;pointer-events:none;">`
+                : `<embed src="${URL.createObjectURL(file)}#toolbar=0&navpanes=0">`;
             item.innerHTML = `
                 <button class="delete-btn" onclick="selectedFiles.splice(${idx}, 1); updateUI();">×</button>
-                <embed src="${URL.createObjectURL(file)}#toolbar=0&navpanes=0">
+                ${previewEl}
                 <div class="file-label">${file.name}</div>`;
             previewContainer.appendChild(item);
         });
@@ -173,6 +211,11 @@ async function updateUI() {
 }
 
 document.getElementById('sort-btn').onclick = () => {
+    selectedFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+    updateUI();
+};
+
+document.getElementById('img-sort-btn').onclick = () => {
     selectedFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
     updateUI();
 };
@@ -235,9 +278,48 @@ pdfWorker.onmessage = (e) => {
     else if (type === 'done') {
         progressModal.style.display = 'none';
     }
+    else if (type === 'error') {
+        progressModal.style.display = 'none';
+        alert('Error: ' + e.data.msg);
+    }
 };
 
+// Converts any browser-decodable image to JPG/PNG bytes (applies EXIF rotation)
+async function imageToBytes(file) {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    const ctx = canvas.getContext('2d');
+    const isJpg = file.type === 'image/jpeg';
+    if (isJpg) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+    ctx.drawImage(bmp, 0, 0);
+    const blob = await new Promise(r => canvas.toBlob(r, isJpg ? 'image/jpeg' : 'image/png', 0.95));
+    return { data: await blob.arrayBuffer(), type: isJpg ? 'jpg' : 'png' };
+}
+
 document.getElementById('process-btn').onclick = async () => {
+    if (currentMode === 'img2pdf') {
+        if (selectedFiles.length === 0) return;
+        progressModal.style.display = 'flex';
+        document.getElementById('op-badge').innerText = "DECODING IMAGES";
+        try {
+            const images = [];
+            for (const f of selectedFiles) images.push(await imageToBytes(f));
+            document.getElementById('op-badge').innerText = "BUILDING PDF";
+            pdfWorker.postMessage({
+                action: 'img2pdf',
+                images,
+                pageSize: document.getElementById('img-page-size').value,
+                margin: parseFloat(document.getElementById('img-margin').value) || 0
+            }, images.map(i => i.data));
+        } catch (err) {
+            progressModal.style.display = 'none';
+            alert('Could not read one of the images: ' + err.message);
+        }
+        return;
+    }
+
     progressModal.style.display = 'flex';
     document.getElementById('op-badge').innerText = "INITIALIZING";
     
@@ -264,7 +346,7 @@ document.getElementById('process-btn').onclick = async () => {
         
         document.getElementById('op-badge').innerText = "MAPPING TEXT LAYER";
         
-        // NEW FIX: We now send the RAW original document and the scale factor into the worker!
+        // Send the RAW original document and the scale factor into the worker
         const filesData = [await selectedFiles[0].arrayBuffer()];
         pdfWorker.postMessage({ 
             action: 'ocr', 
@@ -285,4 +367,3 @@ document.getElementById('process-btn').onclick = async () => {
 </script>
 </body>
 </html>
-
