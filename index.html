@@ -66,6 +66,26 @@
                 <p class="helper-text">Drag thumbnails to reorder pages.</p>
             </div>
 
+            <div id="compress-sidebar-ui" style="display:none;">
+                <label>COMPRESS PDF</label>
+                <div style="margin: 15px 0; width: 100%;">
+                    <label style="font-size: 10px; color: #64748b;">METHOD</label>
+                    <select id="compress-mode" class="range-field">
+                        <option value="strong">Strong (convert pages to images)</option>
+                        <option value="light">Light (keep text, small savings)</option>
+                    </select>
+                </div>
+                <div id="compress-level-box" style="margin: 15px 0; width: 100%;">
+                    <label style="font-size: 10px; color: #64748b;">COMPRESSION LEVEL</label>
+                    <select id="compress-level" class="range-field">
+                        <option value="max">Maximum compression</option>
+                        <option value="balanced" selected>Balanced</option>
+                        <option value="quality">Better quality</option>
+                    </select>
+                </div>
+                <p class="helper-text" id="compress-help">Strong mode turns each page into a compressed image. Text will no longer be selectable (run OCR afterwards to restore it).</p>
+            </div>
+
             <button id="process-btn" class="primary-btn">Process Now</button>
             <button id="clear-btn" class="danger-link" onclick="location.reload()">Clear Workspace</button>
         </aside>
@@ -101,6 +121,12 @@
                         <p>Turn JPG, PNG and other images into a single PDF.</p>
                         <span class="op-action">START CONVERTING →</span>
                     </div>
+                    <div class="op-card" onclick="switchMode('compress')">
+                        <div class="op-icon">🗜️</div>
+                        <h3>Compress PDF</h3>
+                        <p>Shrink large PDF files to a much smaller size.</p>
+                        <span class="op-action">START COMPRESSING →</span>
+                    </div>
                 </div>
             </div>
             <div id="preview-container" class="grid-container" style="display:none;"></div>
@@ -134,22 +160,50 @@ const landingPage = document.getElementById('landing-page');
 const sidebar = document.getElementById('sidebar');
 const rangeInput = document.getElementById('range-input');
 const progressModal = document.getElementById('progress-modal');
+const statusBar = document.getElementById('status-bar');
 
 let selectedFiles = [];
 let selectedPages = new Set();
 let currentMode = '';
 let totalPagesInDoc = 0;
 let draggedIdx = null;
+let compressOriginalSize = 0;
 
 const logs = {
     merge: ["Analyzing documents...", "Aligning pages...", "Injecting metadata...", "Optimizing size...", "Finalizing binary..."],
     split: ["Reading source...", "Isolating buffers...", "Generating headers...", "Extracting layers...", "Wrapping PDF..."],
     ocr: ["Waking up neural net...", "Rendering high-DPI layers...", "Identifying character bounds...", "Injecting invisible text layer...", "Constructing Searchable PDF..."],
-    img2pdf: ["Decoding images...", "Fixing orientation...", "Embedding pixels...", "Laying out pages...", "Finalizing binary..."]
+    img2pdf: ["Decoding images...", "Fixing orientation...", "Embedding pixels...", "Laying out pages...", "Finalizing binary..."],
+    compress: ["Reading document...", "Rendering pages...", "Squeezing pixels...", "Rebuilding PDF...", "Finalizing binary..."]
+};
+
+// Quality presets for Strong compression: render scale (1 = 72 dpi) and JPEG quality
+const COMPRESS_PRESETS = {
+    max:      { scale: 1.0, quality: 0.5 },
+    balanced: { scale: 1.5, quality: 0.65 },
+    quality:  { scale: 2.0, quality: 0.8 }
 };
 
 // Initialize PDF.js worker for rendering canvases
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function setProgress(value) {
+    const percent = Math.max(0, Math.min(100, Math.round(value)));
+    document.getElementById('modal-progress-bar').style.width = percent + '%';
+    document.getElementById('liquid-box').style.setProperty('--progress', percent + '%');
+    document.getElementById('modal-percent').innerText = percent + '%';
+
+    const curLogs = logs[currentMode] || logs.merge;
+    const logIdx = Math.min(Math.floor(percent / 20), curLogs.length - 1);
+    document.getElementById('live-log').innerText = curLogs[logIdx];
+    return percent;
+}
 
 function switchMode(mode) {
     currentMode = mode;
@@ -160,6 +214,7 @@ function switchMode(mode) {
     document.getElementById('split-sidebar-ui').style.display = mode === 'split' ? 'block' : 'none';
     document.getElementById('ocr-sidebar-ui').style.display = mode === 'ocr' ? 'block' : 'none';
     document.getElementById('img2pdf-sidebar-ui').style.display = mode === 'img2pdf' ? 'block' : 'none';
+    document.getElementById('compress-sidebar-ui').style.display = mode === 'compress' ? 'block' : 'none';
     fileInput.accept = mode === 'img2pdf' ? 'image/*' : '.pdf';
     fileInput.click();
 }
@@ -171,7 +226,8 @@ fileInput.onchange = async () => {
         newFiles = newFiles.filter(f => f.type.startsWith('image/'));
         selectedFiles = [...selectedFiles, ...newFiles];
     } else {
-        selectedFiles = (currentMode === 'split' || currentMode === 'ocr') ? [newFiles[0]] : [...selectedFiles, ...newFiles];
+        const singleFileMode = currentMode === 'split' || currentMode === 'ocr' || currentMode === 'compress';
+        selectedFiles = singleFileMode ? [newFiles[0]] : [...selectedFiles, ...newFiles];
     }
     fileInput.value = ''; // allows re-adding the same file
     updateUI();
@@ -204,6 +260,17 @@ async function updateUI() {
                 <div class="file-label">${file.name}</div>`;
             previewContainer.appendChild(item);
         });
+    } else if (currentMode === 'compress') {
+        if (selectedFiles.length === 0) return;
+        const file = selectedFiles[0];
+        const item = document.createElement('div');
+        item.className = 'preview-item';
+        item.style.cursor = 'default';
+        item.innerHTML = `
+            <embed src="${URL.createObjectURL(file)}#toolbar=0&navpanes=0">
+            <div class="file-label">${file.name}<br><small>Original size: ${formatSize(file.size)}</small></div>`;
+        previewContainer.appendChild(item);
+        statusBar.innerText = `Loaded ${file.name} (${formatSize(file.size)})`;
     } else {
         const data = await selectedFiles[0].arrayBuffer();
         pdfWorker.postMessage({ action: 'get-pages', filesData: [data] }, [data]);
@@ -218,6 +285,15 @@ document.getElementById('sort-btn').onclick = () => {
 document.getElementById('img-sort-btn').onclick = () => {
     selectedFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
     updateUI();
+};
+
+// Show/hide the level selector depending on the compression method
+document.getElementById('compress-mode').onchange = (e) => {
+    const strong = e.target.value === 'strong';
+    document.getElementById('compress-level-box').style.display = strong ? 'block' : 'none';
+    document.getElementById('compress-help').innerText = strong
+        ? 'Strong mode turns each page into a compressed image. Text will no longer be selectable (run OCR afterwards to restore it).'
+        : 'Light mode removes unused data and repacks the file. Text stays selectable, but savings are usually small.';
 };
 
 document.getElementById('select-all-btn').onclick = () => {
@@ -246,16 +322,8 @@ pdfWorker.onmessage = (e) => {
     const { type, data, index, value, filename } = e.data;
     
     if (type === 'progress') {
-        const percent = Math.round(value);
-        document.getElementById('modal-progress-bar').style.width = percent + '%';
-        document.getElementById('liquid-box').style.setProperty('--progress', percent + '%');
-        document.getElementById('modal-percent').innerText = percent + '%';
-        
-        const curLogs = logs[currentMode] || logs.merge;
-        const logIdx = Math.min(Math.floor(percent / 20), curLogs.length - 1);
-        document.getElementById('live-log').innerText = curLogs[logIdx];
-        
-        if(percent >= 100) document.getElementById('op-badge').innerText = "FINISHING";
+        const percent = setProgress(value);
+        if (percent >= 100) document.getElementById('op-badge').innerText = "FINISHING";
     } 
     else if (type === 'page-preview') {
         totalPagesInDoc++;
@@ -269,6 +337,16 @@ pdfWorker.onmessage = (e) => {
         previewContainer.appendChild(item);
     } 
     else if (type === 'page' || (type === 'done' && data)) {
+        if (currentMode === 'compress' && data) {
+            const newSize = data.byteLength;
+            const saved = ((1 - newSize / compressOriginalSize) * 100).toFixed(1);
+            if (newSize >= compressOriginalSize) {
+                statusBar.innerText = `Result (${formatSize(newSize)}) is not smaller than the original (${formatSize(compressOriginalSize)}).`;
+                alert('The compressed file is not smaller than the original. Try a stronger compression level, or this PDF may already be optimized.');
+            } else {
+                statusBar.innerText = `Compressed: ${formatSize(compressOriginalSize)} → ${formatSize(newSize)} (${saved}% smaller)`;
+            }
+        }
         const link = document.createElement('a');
         link.href = URL.createObjectURL(new Blob([data], {type:'application/pdf'}));
         link.download = filename || "output.pdf";
@@ -299,6 +377,64 @@ async function imageToBytes(file) {
 }
 
 document.getElementById('process-btn').onclick = async () => {
+    // ---------- COMPRESS ----------
+    if (currentMode === 'compress') {
+        if (selectedFiles.length === 0) return;
+        const file = selectedFiles[0];
+        compressOriginalSize = file.size;
+        const method = document.getElementById('compress-mode').value;
+
+        progressModal.style.display = 'flex';
+        setProgress(0);
+
+        try {
+            if (method === 'light') {
+                document.getElementById('op-badge').innerText = "OPTIMIZING STRUCTURE";
+                const buf = await file.arrayBuffer();
+                pdfWorker.postMessage({ action: 'compress-light', filesData: [buf] }, [buf]);
+            } else {
+                document.getElementById('op-badge').innerText = "RENDERING PAGES";
+                const preset = COMPRESS_PRESETS[document.getElementById('compress-level').value];
+                const buf = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+
+                const pages = [];
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const baseViewport = page.getViewport({ scale: 1 }); // size in PDF points
+                    const viewport = page.getViewport({ scale: preset.scale });
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = Math.floor(viewport.width);
+                    canvas.height = Math.floor(viewport.height);
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#fff'; // JPEG has no transparency
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    await page.render({ canvasContext: ctx, viewport }).promise;
+
+                    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', preset.quality));
+                    pages.push({
+                        data: await blob.arrayBuffer(),
+                        width: baseViewport.width,
+                        height: baseViewport.height
+                    });
+
+                    canvas.width = canvas.height = 0; // free memory
+                    page.cleanup();
+                    setProgress((i / pdf.numPages) * 70); // rendering = first 70%
+                }
+
+                document.getElementById('op-badge').innerText = "BUILDING PDF";
+                pdfWorker.postMessage({ action: 'compress-strong', pages }, pages.map(p => p.data));
+            }
+        } catch (err) {
+            progressModal.style.display = 'none';
+            alert('Could not compress this PDF: ' + err.message);
+        }
+        return;
+    }
+
+    // ---------- IMAGE TO PDF ----------
     if (currentMode === 'img2pdf') {
         if (selectedFiles.length === 0) return;
         progressModal.style.display = 'flex';
