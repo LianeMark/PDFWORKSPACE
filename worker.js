@@ -50,11 +50,11 @@ onmessage = async function(e) {
             postMessage({ type: 'done' });
         }
         else if (action === 'ocr') {
-            // Unpack the new variables we sent from the main thread
+            // Unpack the variables sent from the main thread
             const { imagesData, filesData, targetPages, scale } = e.data;
             let currentIndex = 0;
             
-            // 1. Wake up the Tesseract AI Engine
+            // 1. Wake up the Tesseract engine
             const tessWorker = await Tesseract.createWorker('eng', 1, {
                 logger: m => {
                     if (m.status === 'recognizing text') {
@@ -81,7 +81,7 @@ onmessage = async function(e) {
                 
                 if (data && data.words) {
                     for (const word of data.words) {
-                        // Math to translate Tesseract coordinates to PDF-lib coordinates
+                        // Translate Tesseract coordinates to PDF-lib coordinates
                         const x = word.bbox.x0 / scale;
                         const y0 = word.bbox.y0 / scale;
                         const y1 = word.bbox.y1 / scale;
@@ -89,13 +89,13 @@ onmessage = async function(e) {
                         const pdfY = pageHeight - y1; // PDF origin is bottom-left, Tesseract is top-left
 
                         try {
-                            // Draw the invisible text perfectly over the image!
+                            // Draw invisible text over the image (hidden but selectable)
                             page.drawText(word.text, {
                                 x: x,
                                 y: pdfY,
                                 size: wordHeight,
                                 font: font,
-                                opacity: 0, // This is the magic that hides the text but keeps it selectable!
+                                opacity: 0,
                             });
                         } catch (err) {
                             // Ignore weird characters that pdf-lib might not like
@@ -109,6 +109,37 @@ onmessage = async function(e) {
             // 4. Save and return the updated original document
             const finalBytes = await originalPdf.save();
             postMessage({ type: 'done', data: finalBytes, filename: "Searchable_OCR_Document.pdf" });
+        }
+        else if (action === 'img2pdf') {
+            const { images, pageSize, margin } = e.data;
+            const pdf = await PDFDocument.create();
+            const SIZES = { a4: [595.28, 841.89], letter: [612, 792] };
+
+            for (let i = 0; i < images.length; i++) {
+                const item = images[i];
+                const img = item.type === 'jpg'
+                    ? await pdf.embedJpg(item.data)
+                    : await pdf.embedPng(item.data);
+
+                if (pageSize === 'fit') {
+                    const page = pdf.addPage([img.width, img.height]);
+                    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+                } else {
+                    let [pw, ph] = SIZES[pageSize];
+                    if (img.width > img.height) [pw, ph] = [ph, pw]; // landscape images get landscape pages
+                    const page = pdf.addPage([pw, ph]);
+
+                    const m = Math.min(margin, Math.min(pw, ph) / 4);
+                    const scale = Math.min((pw - 2 * m) / img.width, (ph - 2 * m) / img.height);
+                    const dw = img.width * scale;
+                    const dh = img.height * scale;
+                    page.drawImage(img, { x: (pw - dw) / 2, y: (ph - dh) / 2, width: dw, height: dh });
+                }
+                postMessage({ type: 'progress', value: ((i + 1) / images.length) * 100 });
+            }
+
+            const bytes = await pdf.save();
+            postMessage({ type: 'done', data: bytes, filename: "images_output.pdf" }, [bytes.buffer]);
         }
     } catch (err) { 
         postMessage({ type: 'error', msg: err.message }); 
